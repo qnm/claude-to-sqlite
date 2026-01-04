@@ -24,9 +24,22 @@ def cli(export_path, db_path):
     claude-to-sqlite claude.zip claude.db
     """
     db = sqlite_utils.Database(db_path)
-    conversations = parse_file(export_path)
+    export_data = parse_file(export_path)
+
+    # Import memories
+    memories = export_data.get("memories", [])
+    if memories:
+        click.echo(f"Importing {len(memories)} memory record(s)...")
+        db["memories"].insert_all(
+            memories,
+            pk="account_uuid",
+            alter=True,
+            replace=True,
+        )
+
+    conversations = export_data.get("conversations", [])
     artifact_versions = {}
-    with click.progressbar(conversations) as bar:
+    with click.progressbar(conversations, label="Processing conversations") as bar:
         for conversation in bar:
             conversation["account_id"] = conversation.pop("account")["uuid"]
             messages = conversation.pop("chat_messages")
@@ -36,6 +49,10 @@ def cli(export_path, db_path):
             )
             for message in messages:
                 to_insert = dict(message, conversation_id=conversation_id)
+
+                # Extract and remove attachments from message before inserting
+                attachments = to_insert.pop("attachments", [])
+
                 db["messages"].insert(
                     to_insert,
                     pk="uuid",
@@ -43,6 +60,17 @@ def cli(export_path, db_path):
                     alter=True,
                     replace=True,
                 )
+
+                # Insert attachments
+                if attachments:
+                    for attachment in attachments:
+                        attachment["message_uuid"] = to_insert["uuid"]
+                        db["attachments"].insert(
+                            attachment,
+                            foreign_keys=[("message_uuid", "messages", "uuid")],
+                            alter=True,
+                        )
+
                 artifacts = []
                 if to_insert["sender"] == "assistant":
                     artifacts = extract_artifacts(
@@ -126,21 +154,34 @@ def extract_artifacts(
 
 
 def parse_file(file_path):
-    json_data = None
+    result = {
+        "memories": [],
+        "conversations": [],
+    }
+
     with open(file_path, "rb") as f:
         if zipfile.is_zipfile(file_path):
             with zipfile.ZipFile(f) as z:
-                if "conversations.json" in z.namelist():
-                    with z.open("conversations.json") as json_file:
-                        json_data = json_file.read()
-                else:
+                # Extract conversations.json (required)
+                if "conversations.json" not in z.namelist():
                     raise click.ClickException(
                         "No 'conversations.json' file found in the ZIP archive"
                     )
+
+                with z.open("conversations.json") as json_file:
+                    result["conversations"] = json.loads(json_file.read())
+
+                # Extract memories.json (optional)
+                if "memories.json" in z.namelist():
+                    with z.open("memories.json") as json_file:
+                        result["memories"] = json.loads(json_file.read())
         else:
+            # Handle standalone JSON file (conversations only)
             f.seek(0)
             json_data = f.read()
-    try:
-        return json.loads(json_data)
-    except json.JSONDecodeError:
-        raise click.ClickException("File is neither a valid ZIP nor a valid JSON file")
+            try:
+                result["conversations"] = json.loads(json_data)
+            except json.JSONDecodeError:
+                raise click.ClickException("File is not a valid JSON file")
+
+    return result

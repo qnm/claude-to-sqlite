@@ -22,7 +22,7 @@ Run the command like this:
 ```bash
 claude-to-sqlite claude-export.zip claude.db
 ```
-Now `claude.db` will be a SQLite containing the `conversations` and `messages` from your Claude export.
+Now `claude.db` will be a SQLite database containing the `memories`, `conversations`, `messages`, `attachments`, and `artifacts` from your Claude export.
 
 You can explore that using [Datasette](https://datasette.io/):
 
@@ -31,55 +31,72 @@ datasette claude.db
 ```
 ## Database schema
 
-Assuming the Claude export JSON has not changed since this tool was last released on 20th October 2024 the database tables should look like this:
+The database contains the following tables:
 
-<!-- [[[cog
-import tempfile, pathlib, sqlite_utils
-from click.testing import CliRunner
-from claude_to_sqlite import cli
+### memories
 
-tmpdir = pathlib.Path(tempfile.mkdtemp())
-db_path = str(tmpdir / "claude.db")
-runner = CliRunner()
-runner.invoke(cli.cli, ["tests/artifacts.json", db_path])
-cog.out("```sql\n")
-schema = sqlite_utils.Database(db_path).schema
-cog.out(schema)
-cog.out("\n```")
-]]] -->
-```sql
-CREATE TABLE [conversations] (
-   [uuid] TEXT PRIMARY KEY,
-   [name] TEXT,
-   [created_at] TEXT,
-   [updated_at] TEXT,
-   [account_id] TEXT
-);
-CREATE TABLE [messages] (
-   [uuid] TEXT PRIMARY KEY,
-   [text] TEXT,
-   [sender] TEXT,
-   [created_at] TEXT,
-   [updated_at] TEXT,
-   [attachments] TEXT,
-   [files] TEXT,
-   [conversation_id] TEXT REFERENCES [conversations]([uuid])
-);
-CREATE TABLE [artifacts] (
-   [id] TEXT PRIMARY KEY,
-   [artifact] TEXT,
-   [identifier] TEXT,
-   [version] INTEGER,
-   [type] TEXT,
-   [language] TEXT,
-   [title] TEXT,
-   [content] TEXT,
-   [thinking] TEXT,
-   [conversation_id] TEXT REFERENCES [conversations]([uuid]),
-   [message_id] TEXT REFERENCES [messages]([uuid])
-);
-```
-<!-- [[[end]]] -->
+Claude's accumulated memory/context about you.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| account_uuid | TEXT PRIMARY KEY | Account UUID |
+| conversations_memory | TEXT | Claude's memory about your preferences, context, etc. |
+
+### conversations
+
+Conversation metadata.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| uuid | TEXT PRIMARY KEY | Conversation UUID |
+| name | TEXT | Conversation title |
+| summary | TEXT | Conversation summary |
+| created_at | TEXT | ISO timestamp |
+| updated_at | TEXT | ISO timestamp |
+| account_id | TEXT | Account UUID |
+
+### messages
+
+Individual chat messages.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| uuid | TEXT PRIMARY KEY | Message UUID |
+| text | TEXT | Message content |
+| sender | TEXT | Either 'human' or 'assistant' |
+| created_at | TEXT | ISO timestamp |
+| updated_at | TEXT | ISO timestamp |
+| conversation_id | TEXT | Links to conversations.uuid |
+
+### attachments
+
+Files attached to messages with extracted content.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| message_uuid | TEXT | Links to messages.uuid |
+| file_name | TEXT | Original filename |
+| file_size | INTEGER | Size in bytes |
+| file_type | TEXT | MIME type |
+| extracted_content | TEXT | Text extracted from the file |
+
+### artifacts
+
+Code blocks and other artifacts from assistant messages.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | TEXT PRIMARY KEY | Artifact ID with version |
+| artifact | TEXT | Base artifact identifier |
+| identifier | TEXT | Artifact identifier from tag |
+| version | INTEGER | Version number |
+| type | TEXT | Artifact type |
+| language | TEXT | Programming language |
+| title | TEXT | Artifact title |
+| content | TEXT | Artifact content |
+| thinking | TEXT | Associated thinking content |
+| conversation_id | TEXT | Links to conversations.uuid |
+| message_id | TEXT | Links to messages.uuid |
 
 ## Development
 
